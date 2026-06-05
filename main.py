@@ -99,15 +99,25 @@ class _AppController(QObject):
         self.window.show_status("キャプチャ中...")
         self.window.set_busy(True)
 
+        # キャプチャにウィンドウが写らないように一時的に隠す
+        self.window.hide()
+        QApplication.processEvents()
+
         # mss は macOS では必ずメインスレッドで呼ぶ必要がある
         try:
             image = capture_screen(capture_mode)
             log.debug("capture_screen() done: size=%s", image.size)
+            
+            # キャプチャが終わったらすぐに戻す
+            self.window.show()
+            QApplication.processEvents()
+
             saved_path = save_screenshot(image, book_title)
             log.debug("save_screenshot() done: path=%s", saved_path)
             self.window.show_captured(str(saved_path))
         except Exception as exc:
             log.exception("capture error")
+            self.window.show() # エラー時も再表示
             self.window.show_error(str(exc))
 
     @pyqtSlot(str)

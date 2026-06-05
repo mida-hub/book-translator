@@ -267,6 +267,7 @@ class OverlayWindow(QMainWindow):
 
         self._step2_frame.hide()
         root.addWidget(self._step2_frame)
+
         root.addStretch()
 
     # ---------------------------------------------------------------- settings
@@ -346,6 +347,7 @@ class OverlayWindow(QMainWindow):
 
     def show_captured(self, png_path: str) -> None:
         """ステップ1完了: キャプチャ保存完了を表示し、OCRボタンを有効化する。"""
+        self.show_status("保存完了")
         self._last_png_path = png_path
         self._capture_count += 1
 
