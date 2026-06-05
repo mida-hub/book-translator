@@ -79,10 +79,6 @@ QLabel#step_header {
     font-weight: bold;
     font-size: 12px;
 }
-QLabel#status {
-    color: #888;
-    font-size: 11px;
-}
 QLabel#file_label {
     color: #9cdcfe;
     font-size: 11px;
@@ -139,10 +135,6 @@ QLabel#step_header {
     font-weight: bold;
     font-size: 12px;
 }
-QLabel#status {
-    color: #666;
-    font-size: 11px;
-}
 QLabel#file_label {
     color: #0078d4;
     font-size: 11px;
@@ -151,7 +143,10 @@ QLabel#file_label {
 
 
 class OverlayWindow(QMainWindow):
-    """常に最前面に表示されるキャプチャ・OCR ステップバイステップウィンドウ。"""
+    """
+    常に最前面に表示されるキャプチャ・OCR ウィンドウ。
+    ユーザーの要望に従い、進捗ログを画面に流さず、コンソール出力に限定します。
+    """
 
     capture_requested = pyqtSignal()
     ocr_requested = pyqtSignal(str)  # png_path
@@ -160,7 +155,6 @@ class OverlayWindow(QMainWindow):
         super().__init__()
         self.settings = settings
         self._click_through = False
-        self._capture_count = 0
         self._last_png_path: str | None = None
 
         self._setup_window()
@@ -168,13 +162,10 @@ class OverlayWindow(QMainWindow):
         self._apply_settings()
         self._restore_geometry()
 
-    # ------------------------------------------------------------------ setup
-
     def _setup_window(self) -> None:
         self.setWindowTitle("Book Translator")
         self.setWindowFlags(
-            Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
+            Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
         )
         self.setMinimumWidth(600)
         self.setMinimumHeight(400)
@@ -182,99 +173,73 @@ class OverlayWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setSizeConstraint(QVBoxLayout.SizeConstraint.SetNoConstraint)
-        root.setSpacing(6)
-        root.setContentsMargins(8, 8, 8, 8)
+        layout = QVBoxLayout(central)
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetNoConstraint)
 
-        # ---- 書籍タイトル行 ----
-        title_row = QHBoxLayout()
-        title_row.addWidget(QLabel("📚"))
+        # ---- Title and Folder ----
+        header_layout = QHBoxLayout()
+        header_layout.addWidget(QLabel("📚"))
         self._title_edit = QLineEdit()
         self._title_edit.setPlaceholderText("書籍タイトルを入力してください")
         self._title_edit.textChanged.connect(self._on_title_changed)
-        title_row.addWidget(self._title_edit, stretch=1)
+        header_layout.addWidget(self._title_edit, stretch=1)
+
         self._open_folder_btn = QPushButton("📂")
-        self._open_folder_btn.setFixedWidth(32)
+        self._open_folder_btn.setFixedWidth(36)
         self._open_folder_btn.setToolTip("保存フォルダを Finder で開く")
         self._open_folder_btn.clicked.connect(self._open_screenshots_folder)
-        title_row.addWidget(self._open_folder_btn)
-        root.addLayout(title_row)
+        header_layout.addWidget(self._open_folder_btn)
+        layout.addLayout(header_layout)
 
-        # ---- コントロール行 ----
-        ctrl_row = QHBoxLayout()
+        # ---- Controls ----
+        ctrl_layout = QHBoxLayout()
         self._capture_combo = QComboBox()
         for label in _CAPTURE_MODES:
             self._capture_combo.addItem(label)
         self._capture_combo.currentTextChanged.connect(self._on_capture_mode_changed)
-        ctrl_row.addWidget(self._capture_combo)
+        ctrl_layout.addWidget(self._capture_combo, stretch=1)
+
         self._capture_btn = QPushButton("📸 キャプチャ")
         self._capture_btn.setToolTip("スクリーンショットを保存 (Cmd+Option+T)")
-        self._capture_btn.clicked.connect(self.capture_requested)
-        ctrl_row.addWidget(self._capture_btn)
+        self._capture_btn.clicked.connect(self.capture_requested.emit)
+        ctrl_layout.addWidget(self._capture_btn, stretch=2)
+
         self._settings_btn = QPushButton("⚙")
-        self._settings_btn.setFixedWidth(32)
+        self._settings_btn.setFixedWidth(36)
         self._settings_btn.setToolTip("設定")
         self._settings_btn.clicked.connect(self._open_settings)
-        ctrl_row.addWidget(self._settings_btn)
-        root.addLayout(ctrl_row)
+        ctrl_layout.addWidget(self._settings_btn)
+        layout.addLayout(ctrl_layout)
 
-        # ---- ステップ 1: キャプチャ完了フレーム（初期非表示）----
-        self._step1_frame = QFrame()
-        self._step1_frame.setObjectName("step_frame")
-        s1 = QVBoxLayout(self._step1_frame)
-        s1.setSpacing(4)
-        s1.setContentsMargins(8, 8, 8, 8)
+        # ---- OCR Trigger Area ----
+        self._ocr_frame = QFrame()
+        self._ocr_frame.setObjectName("step_frame")
+        ocr_layout = QVBoxLayout(self._ocr_frame)
 
-        s1_header = QLabel("✅  ステップ 1: キャプチャ保存完了")
-        s1_header.setObjectName("step_header")
-        s1.addWidget(s1_header)
-
-        self._png_name_label = QLabel("")
-        self._png_name_label.setObjectName("file_label")
-        s1.addWidget(self._png_name_label)
-
-        self._ocr_btn = QPushButton("🔤  テキスト変換を実行")
-        self._ocr_btn.setToolTip(
-            "保存した PNG を Vision OCR でテキストに変換し .txt として保存します"
-        )
+        self._ocr_btn = QPushButton("🔤 テキスト変換を実行 (OCR)")
+        self._ocr_btn.setToolTip("最後に保存した PNG をテキストに変換します")
         self._ocr_btn.clicked.connect(self._on_ocr_btn_clicked)
-        s1.addWidget(self._ocr_btn)
+        self._ocr_btn.setEnabled(False)
+        ocr_layout.addWidget(self._ocr_btn)
 
-        self._step1_frame.hide()
-        root.addWidget(self._step1_frame)
+        self._ocr_frame.hide() # 初期は非表示
+        layout.addWidget(self._ocr_frame)
 
-        # ---- ステップ 2: OCR 完了フレーム（初期非表示）----
-        self._step2_frame = QFrame()
-        self._step2_frame.setObjectName("step_frame")
-        s2 = QVBoxLayout(self._step2_frame)
-        s2.setSpacing(4)
-        s2.setContentsMargins(8, 8, 8, 8)
-
-        s2_header = QLabel("✅  ステップ 2: テキスト変換完了")
-        s2_header.setObjectName("step_header")
-        s2.addWidget(s2_header)
-
-        self._txt_name_label = QLabel("")
-        self._txt_name_label.setObjectName("file_label")
-        s2.addWidget(self._txt_name_label)
-
+        # ---- Result Display Area ----
         self._text_edit = QTextEdit()
         self._text_edit.setReadOnly(True)
         self._text_edit.setMinimumHeight(250)
-        self._text_edit.setPlaceholderText("変換されたテキストがここに表示されます")
-        s2.addWidget(self._text_edit, stretch=1)
+        self._text_edit.setPlaceholderText("OCR結果がここに表示されます")
+        layout.addWidget(self._text_edit, stretch=1)
 
-        self._step2_frame.hide()
-        root.addWidget(self._step2_frame)
-
-        root.addStretch()
+        layout.addStretch()
 
     # ---------------------------------------------------------------- settings
 
     def _apply_settings(self) -> None:
         self.setWindowOpacity(self.settings.get("opacity", 0.92))
-
         theme = self.settings.get("theme", "dark")
         self.setStyleSheet(_DARK_STYLE if theme == "dark" else _LIGHT_STYLE)
 
@@ -300,9 +265,17 @@ class OverlayWindow(QMainWindow):
             self.settings.get("window_height", 400),
         )
 
+    def _save_geometry(self) -> None:
+        geo = self.geometry()
+        self.settings.update({
+            "window_x": geo.x(),
+            "window_y": geo.y(),
+            "window_width": geo.width(),
+            "window_height": geo.height(),
+        })
+
     def _open_settings(self) -> None:
         from src.ui.settings_dialog import SettingsDialog
-
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec():
             self._apply_settings()
@@ -326,11 +299,7 @@ class OverlayWindow(QMainWindow):
 
     def _open_screenshots_folder(self) -> None:
         book_title = self.settings.get("book_title", "").strip()
-        target = (
-            SCREENSHOTS_BASE_DIR / _safe_dirname(book_title)
-            if book_title
-            else SCREENSHOTS_BASE_DIR
-        )
+        target = SCREENSHOTS_BASE_DIR / _safe_dirname(book_title) if book_title else SCREENSHOTS_BASE_DIR
         target.mkdir(parents=True, exist_ok=True)
         subprocess.run(["open", str(target)], check=False)
 
@@ -342,34 +311,28 @@ class OverlayWindow(QMainWindow):
     # --------------------------------------------------------------- public API
 
     def show_status(self, message: str) -> None:
+        """UIには表示せず、コンソールログのみ出力します。"""
         import logging
-        logging.getLogger("book-translator").debug("status: %s", message)
+        logging.getLogger("book-translator").info("Status: %s", message)
 
     def show_captured(self, png_path: str) -> None:
-        """ステップ1完了: キャプチャ保存完了を表示し、OCRボタンを有効化する。"""
-        self.show_status("保存完了")
+        """キャプチャ完了通知。ボタンの有効化と内部状態の更新のみ。"""
         self._last_png_path = png_path
-        self._capture_count += 1
-
-        self._png_name_label.setText(f"📸  {Path(png_path).name}")
         self._ocr_btn.setEnabled(True)
-
-        # 新しいキャプチャ時はステップ2を非表示に戻す
-        self._step2_frame.hide()
-        self._step1_frame.show()
-
+        self._ocr_frame.show()
         self._capture_btn.setEnabled(True)
+        self.show_status(f"Captured: {Path(png_path).name}")
 
     def show_ocr_done(self, txt_path: str, text: str) -> None:
-        """ステップ2完了: OCR結果とテキストファイルパスを表示する。"""
-        self._txt_name_label.setText(f"📝  {Path(txt_path).name}")
+        """OCR完了。テキスト表示エリアの更新。"""
         self._text_edit.setPlainText(text)
-        self._step2_frame.show()
         self._ocr_btn.setEnabled(True)
+        self.show_status(f"OCR Done: {Path(txt_path).name}")
 
     def show_error(self, message: str) -> None:
+        """エラー通知もコンソールログのみ。"""
         import logging
-        logging.getLogger("book-translator").error("error: %s", message)
+        logging.getLogger("book-translator").error("Error: %s", message)
         self._capture_btn.setEnabled(True)
         self._ocr_btn.setEnabled(self._last_png_path is not None)
 
@@ -394,17 +357,6 @@ class OverlayWindow(QMainWindow):
     def moveEvent(self, event) -> None:
         super().moveEvent(event)
         self._save_geometry()
-
-    def _save_geometry(self) -> None:
-        geo = self.geometry()
-        self.settings.update(
-            {
-                "window_x": geo.x(),
-                "window_y": geo.y(),
-                "window_width": geo.width(),
-                "window_height": geo.height(),
-            }
-        )
 
     def closeEvent(self, event) -> None:
         self._save_geometry()
