@@ -223,6 +223,13 @@ class OverlayWindow(QMainWindow):
         self._settings_btn.clicked.connect(self._open_settings)
         ctrl_layout.addWidget(self._settings_btn)
         
+        # 終了ボタン
+        self._quit_btn = QPushButton("❌")
+        self._quit_btn.setFixedWidth(36)
+        self._quit_btn.setToolTip("アプリを終了")
+        self._quit_btn.clicked.connect(self.close)
+        ctrl_layout.addWidget(self._quit_btn)
+        
         layout.addLayout(ctrl_layout)
 
         # ---- Result Display Area ----
@@ -284,6 +291,12 @@ class OverlayWindow(QMainWindow):
 
     def _on_capture_mode_changed(self, label: str) -> None:
         self.settings.set("capture_mode", _CAPTURE_MODES.get(label, "full"))
+
+    def _on_quit_clicked(self) -> None:
+        """保存して安全に終了をリクエストする。"""
+        self._save_geometry()
+        from PyQt6.QtWidgets import QApplication
+        QApplication.quit()
 
     def _on_ocr_btn_clicked(self) -> None:
         if self._last_png_path:

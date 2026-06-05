@@ -1,10 +1,11 @@
 import logging
+import os
 import sys
 import time
 from pathlib import Path
 
 from PIL import Image
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from src.capture import capture_screen, save_screenshot, save_text
@@ -158,8 +159,20 @@ def main() -> int:
         log.error("Hotkey listener failed to start: %s", exc)
         hotkey_listener = None
 
+    # 終了シグナルに反応して、数秒後に強制終了するウォッチドッグを設定
+    # これにより QApplication.quit() が呼ばれた後、クリーンアップでハングしても確実に終了する
+    def _on_about_to_quit():
+        log.info("Closing application...")
+        # 1.5秒待っても終了しない場合は強制終了
+        QTimer.singleShot(1500, lambda: os._exit(0))
+
+    app.aboutToQuit.connect(_on_about_to_quit)
+
     window.show()
-    return app.exec()
+    exit_code = app.exec()
+
+    log.info("Process finished. Force exiting.")
+    os._exit(exit_code)
 
 
 if __name__ == "__main__":
