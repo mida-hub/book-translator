@@ -178,7 +178,7 @@ class OverlayWindow(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetNoConstraint)
 
-        # ---- Title and Folder ----
+        # ---- Row 1: Title and Folder ----
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("📚"))
         self._title_edit = QLineEdit()
@@ -193,45 +193,42 @@ class OverlayWindow(QMainWindow):
         header_layout.addWidget(self._open_folder_btn)
         layout.addLayout(header_layout)
 
-        # ---- Controls ----
+        # ---- Row 2: Controls (Mode, Capture, OCR, Settings) ----
         ctrl_layout = QHBoxLayout()
+        
+        # キャプチャ対象
         self._capture_combo = QComboBox()
         for label in _CAPTURE_MODES:
             self._capture_combo.addItem(label)
         self._capture_combo.currentTextChanged.connect(self._on_capture_mode_changed)
         ctrl_layout.addWidget(self._capture_combo, stretch=1)
 
+        # キャプチャボタン
         self._capture_btn = QPushButton("📸 キャプチャ")
         self._capture_btn.setToolTip("スクリーンショットを保存 (Cmd+Option+T)")
         self._capture_btn.clicked.connect(self.capture_requested.emit)
-        ctrl_layout.addWidget(self._capture_btn, stretch=2)
+        ctrl_layout.addWidget(self._capture_btn, stretch=1)
 
+        # テキスト変換ボタン
+        self._ocr_btn = QPushButton("🔤 変換")
+        self._ocr_btn.setToolTip("最後に保存した PNG をテキストに変換します")
+        self._ocr_btn.clicked.connect(self._on_ocr_btn_clicked)
+        self._ocr_btn.setEnabled(False)
+        ctrl_layout.addWidget(self._ocr_btn, stretch=1)
+
+        # 設定ボタン
         self._settings_btn = QPushButton("⚙")
         self._settings_btn.setFixedWidth(36)
         self._settings_btn.setToolTip("設定")
         self._settings_btn.clicked.connect(self._open_settings)
         ctrl_layout.addWidget(self._settings_btn)
+        
         layout.addLayout(ctrl_layout)
-
-        # ---- OCR Trigger Area ----
-        self._ocr_frame = QFrame()
-        self._ocr_frame.setObjectName("step_frame")
-        ocr_layout = QVBoxLayout(self._ocr_frame)
-
-        self._ocr_btn = QPushButton("🔤 テキスト変換を実行 (OCR)")
-        self._ocr_btn.setToolTip("最後に保存した PNG をテキストに変換します")
-        self._ocr_btn.clicked.connect(self._on_ocr_btn_clicked)
-        self._ocr_btn.setEnabled(False)
-        ocr_layout.addWidget(self._ocr_btn)
-
-        self._ocr_frame.hide() # 初期は非表示
-        layout.addWidget(self._ocr_frame)
 
         # ---- Result Display Area ----
         self._text_edit = QTextEdit()
         self._text_edit.setReadOnly(True)
         self._text_edit.setMinimumHeight(250)
-        self._text_edit.setPlaceholderText("OCR結果がここに表示されます")
         layout.addWidget(self._text_edit, stretch=1)
 
         layout.addStretch()
@@ -319,7 +316,6 @@ class OverlayWindow(QMainWindow):
         """キャプチャ完了通知。ボタンの有効化と内部状態の更新のみ。"""
         self._last_png_path = png_path
         self._ocr_btn.setEnabled(True)
-        self._ocr_frame.show()
         self._capture_btn.setEnabled(True)
         self.show_status(f"Captured: {Path(png_path).name}")
 
