@@ -1,5 +1,6 @@
 import io
 import re
+import logging
 
 from PIL import Image
 
@@ -12,19 +13,11 @@ try:
 except ImportError:
     VISION_AVAILABLE = False
 
+log = logging.getLogger("book-translator")
 
 def recognize_text_from_image(pil_image: Image.Image) -> str:
     """
     macOS Vision フレームワークで画像から英語テキストを抽出する。
-
-    Args:
-        pil_image: 対象の PIL Image
-
-    Returns:
-        抽出・整形済みのテキスト文字列
-
-    Raises:
-        RuntimeError: Vision フレームワーク未インストール、または OCR 失敗時
     """
     if not VISION_AVAILABLE:
         raise RuntimeError(
@@ -32,13 +25,35 @@ def recognize_text_from_image(pil_image: Image.Image) -> str:
             "uv sync を実行してください。"
         )
 
+    log.debug("Converting PIL image to CGImage...")
     cg_image = _pil_to_cgimage(pil_image)
     recognized_strings: list[str] = []
 
     def completion_handler(request, error):
-        if error or request.results() is None:
+        if error:
+            log.error("Vision request error: %s", error)
             return
-        for observation in request.results():
+
+        results = request.results()
+        if results is None:
+            log.debug("No results from Vision request.")
+            return
+
+        log.debug("Found %d text observations.", len(results))
+        for observation in results:
+            # 座標系は左下が (0,0)、右上が (1,1)
+            box = observation.boundingBox()
+            top = box.origin.y + box.size.height
+            bottom = box.origin.y
+
+            # 上端 5% (メニューバー等) と下端 5% (ページ番号・進捗等) を除外
+            if top > 0.95:
+                log.debug("Filtered out top margin text: %s", observation.topCandidates_(1)[0].string() if observation.topCandidates_(1) else "")
+                continue
+            if bottom < 0.05:
+                log.debug("Filtered out bottom margin text: %s", observation.topCandidates_(1)[0].string() if observation.topCandidates_(1) else "")
+                continue
+
             candidates = observation.topCandidates_(1)
             if candidates:
                 recognized_strings.append(candidates[0].string())
@@ -50,6 +65,7 @@ def recognize_text_from_image(pil_image: Image.Image) -> str:
     request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
     request.setUsesLanguageCorrection_(True)
 
+    log.debug("Performing Vision request...")
     handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(
         cg_image, {}
     )
@@ -58,7 +74,14 @@ def recognize_text_from_image(pil_image: Image.Image) -> str:
     if not success:
         raise RuntimeError(f"Vision OCR 失敗: {error}")
 
-    return _clean_text("\n".join(recognized_strings))
+    full_text = "\n".join(recognized_strings)
+    log.debug("Raw OCR text length: %d", len(full_text))
+
+    cleaned = _clean_text(full_text)
+    log.debug("Cleaned OCR text length: %d", len(cleaned))
+
+    return cleaned
+
 
 
 def _pil_to_cgimage(pil_image: Image.Image):

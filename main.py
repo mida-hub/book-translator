@@ -65,7 +65,6 @@ class _AppController(QObject):
         self._sig_capture.connect(self._start_capture)
         self._sig_toggle_click_through.connect(window.toggle_click_through)
         window.capture_requested.connect(self._start_capture)
-        window.ocr_requested.connect(self._start_ocr)
 
     def on_hotkey_capture(self) -> None:
         self._sig_capture.emit()
@@ -101,7 +100,11 @@ class _AppController(QObject):
             QApplication.processEvents()
 
             saved_path = save_screenshot(image, book_title)
+            log.info("Captured: %s", saved_path.name)
             self.window.show_captured(str(saved_path))
+            
+            # Automatically start OCR
+            self._start_ocr(str(saved_path))
         except Exception as exc:
             log.exception("Capture process failed")
             self.window.show()
@@ -109,17 +112,32 @@ class _AppController(QObject):
 
     @pyqtSlot(str)
     def _start_ocr(self, png_path: str) -> None:
-        if self._thread is not None and self._thread.isRunning():
-            return
-
+        """OCRを一時的にメインスレッドで実行して、ハングの原因を調査する。"""
         self.window.set_busy(True)
-        worker = _OcrWorker(png_path)
-        self._run_worker(
-            worker,
-            on_finished=self.window.show_ocr_done,
-            on_error=self.window.show_error,
-            on_status=self.window.show_status,
-        )
+        log.info("Starting OCR (Direct) for: %s", Path(png_path).name)
+        
+        try:
+            from PIL import Image
+            image = Image.open(png_path)
+            text = recognize_text_from_image(image)
+            
+            if not text.strip():
+                self._on_ocr_error("No text detected.")
+                return
+                
+            txt_path = save_text(text, Path(png_path))
+            self._on_ocr_finished(str(txt_path), text)
+        except Exception as exc:
+            log.exception("Direct OCR failed")
+            self._on_ocr_error(str(exc))
+
+    def _on_ocr_finished(self, txt_path: str, text: str) -> None:
+        log.info("OCR Success: %s", Path(txt_path).name)
+        self.window.show_ocr_done(txt_path, text)
+
+    def _on_ocr_error(self, message: str) -> None:
+        log.error("OCR Failed: %s", message)
+        self.window.show_error(message)
 
     def _run_worker(self, worker: QObject, *, on_finished, on_error, on_status) -> None:
         thread = QThread()

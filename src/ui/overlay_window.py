@@ -151,7 +151,6 @@ class OverlayWindow(QMainWindow):
     """
 
     capture_requested = pyqtSignal()
-    ocr_requested = pyqtSignal(str)  # png_path
 
     def __init__(self, settings: Settings) -> None:
         super().__init__()
@@ -212,18 +211,27 @@ class OverlayWindow(QMainWindow):
             self._capture_combo.addItem(label)
         self._capture_combo.currentTextChanged.connect(self._on_capture_mode_changed)
         ctrl_layout.addWidget(self._capture_combo, stretch=1)
-
         self._capture_btn = QPushButton("📸 キャプチャ")
         self._capture_btn.setToolTip("スクリーンショットを保存 (Cmd+Option+T)")
         self._capture_btn.clicked.connect(self.capture_requested.emit)
-        ctrl_layout.addWidget(self._capture_btn, stretch=1)
+        ctrl_layout.addWidget(self._capture_btn, stretch=2)
 
-        self._ocr_btn = QPushButton("🔤 変換")
-        self._ocr_btn.setToolTip("最後に保存した PNG をテキストに変換します")
-        self._ocr_btn.clicked.connect(self._on_ocr_btn_clicked)
-        self._ocr_btn.setEnabled(False)
-        ctrl_layout.addWidget(self._ocr_btn, stretch=1)
+        # コピーボタン
+        self._copy_btn = QPushButton("📋")
+        self._copy_btn.setFixedWidth(36)
+        self._copy_btn.setToolTip("テキストをコピー")
+        self._copy_btn.clicked.connect(self._on_copy_clicked)
+        ctrl_layout.addWidget(self._copy_btn)
 
+        # クリアボタン
+        self._clear_btn = QPushButton("🧹")
+        self._clear_btn.setFixedWidth(36)
+        self._clear_btn.setToolTip("テキストを消去")
+        self._clear_btn.clicked.connect(self._on_clear_clicked)
+        self._clear_btn.setStyleSheet("background-color: #444;")
+        ctrl_layout.addWidget(self._clear_btn)
+
+        # 設定ボタン
         self._settings_btn = QPushButton("⚙")
         self._settings_btn.setFixedWidth(36)
         self._settings_btn.setToolTip("設定")
@@ -243,7 +251,8 @@ class OverlayWindow(QMainWindow):
         self._bottom_container = QWidget()
         self._bottom_container.setObjectName("bottom_container")
         bottom_layout = QVBoxLayout(self._bottom_container)
-        bottom_layout.setContentsMargins(12, 0, 12, 12)
+        bottom_layout.setContentsMargins(12, 10, 12, 12)
+        bottom_layout.setSpacing(0)
 
         self._text_edit = QTextEdit()
         self._text_edit.setObjectName("text_edit")
@@ -333,10 +342,16 @@ class OverlayWindow(QMainWindow):
         from PyQt6.QtWidgets import QApplication
         QApplication.quit()
 
-    def _on_ocr_btn_clicked(self) -> None:
-        if self._last_png_path:
-            self._ocr_btn.setEnabled(False)
-            self.ocr_requested.emit(self._last_png_path)
+    def _on_copy_clicked(self) -> None:
+        text = self._text_edit.toPlainText().strip()
+        if text:
+            from PyQt6.QtWidgets import QApplication
+            QApplication.clipboard().setText(text)
+            self.show_status("Copied to clipboard.")
+
+    def _on_clear_clicked(self) -> None:
+        self._text_edit.clear()
+        self.show_status("Text cleared.")
 
     def _set_click_through(self, enabled: bool) -> None:
         self._click_through = enabled
@@ -361,16 +376,14 @@ class OverlayWindow(QMainWindow):
         logging.getLogger("book-translator").info("Status: %s", message)
 
     def show_captured(self, png_path: str) -> None:
-        """キャプチャ完了通知。ボタンの有効化と内部状態の更新のみ。"""
+        """キャプチャ完了通知。内部状態の更新のみ。"""
         self._last_png_path = png_path
-        self._ocr_btn.setEnabled(True)
         self._capture_btn.setEnabled(True)
         self.show_status(f"Captured: {Path(png_path).name}")
 
     def show_ocr_done(self, txt_path: str, text: str) -> None:
         """OCR完了。テキスト表示エリアの更新。"""
         self._text_edit.setPlainText(text)
-        self._ocr_btn.setEnabled(True)
         self.show_status(f"OCR Done: {Path(txt_path).name}")
 
     def show_error(self, message: str) -> None:
@@ -378,12 +391,9 @@ class OverlayWindow(QMainWindow):
         import logging
         logging.getLogger("book-translator").error("Error: %s", message)
         self._capture_btn.setEnabled(True)
-        self._ocr_btn.setEnabled(self._last_png_path is not None)
 
     def set_busy(self, busy: bool) -> None:
         self._capture_btn.setEnabled(not busy)
-        if busy:
-            self._ocr_btn.setEnabled(False)
 
     def focus_title_input(self) -> None:
         self._title_edit.setFocus()
