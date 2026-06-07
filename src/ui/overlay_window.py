@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QPushButton,
+    QSizeGrip,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -24,8 +25,23 @@ _CAPTURE_MODES: dict[str, str] = {
 }
 
 _DARK_STYLE = """
-QMainWindow, QWidget {
+QMainWindow, QWidget#central_widget {
+    background: transparent;
+}
+#top_container {
     background-color: #1e1e1e;
+    color: #e0e0e0;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    border: 1px solid #3c3c3c;
+    border-bottom: none;
+}
+#bottom_container {
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+    border: none;
+}
+QLabel {
     color: #e0e0e0;
 }
 QLineEdit {
@@ -36,9 +52,9 @@ QLineEdit {
     padding: 4px 8px;
 }
 QTextEdit {
-    background-color: #252526;
+    background-color: transparent;
     color: #e0e0e0;
-    border: 1px solid #3c3c3c;
+    border: none;
     border-radius: 4px;
     padding: 6px;
 }
@@ -68,25 +84,26 @@ QPushButton:disabled {
     background-color: #3c3c3c;
     color: #555;
 }
-QFrame#step_frame {
-    border: 1px solid #3c3c3c;
-    border-radius: 6px;
-    background-color: #252526;
-}
-QLabel#step_header {
-    color: #4ec9b0;
-    font-weight: bold;
-    font-size: 12px;
-}
-QLabel#file_label {
-    color: #9cdcfe;
-    font-size: 11px;
-}
 """
 
 _LIGHT_STYLE = """
-QMainWindow, QWidget {
+QMainWindow, QWidget#central_widget {
+    background: transparent;
+}
+#top_container {
     background-color: #f5f5f5;
+    color: #1a1a1a;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    border: 1px solid #ccc;
+    border-bottom: none;
+}
+#bottom_container {
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+    border: none;
+}
+QLabel {
     color: #1a1a1a;
 }
 QLineEdit {
@@ -97,9 +114,9 @@ QLineEdit {
     padding: 4px 8px;
 }
 QTextEdit {
-    background-color: #ffffff;
+    background-color: transparent;
     color: #1a1a1a;
-    border: 1px solid #ccc;
+    border: none;
     border-radius: 4px;
     padding: 6px;
 }
@@ -124,20 +141,6 @@ QPushButton:disabled {
     background-color: #ccc;
     color: #888;
 }
-QFrame#step_frame {
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    background-color: #ffffff;
-}
-QLabel#step_header {
-    color: #107c10;
-    font-weight: bold;
-    font-size: 12px;
-}
-QLabel#file_label {
-    color: #0078d4;
-    font-size: 11px;
-}
 """
 
 
@@ -155,6 +158,7 @@ class OverlayWindow(QMainWindow):
         self.settings = settings
         self._click_through = False
         self._last_png_path: str | None = None
+        self._drag_pos = None
 
         self._setup_window()
         self._build_ui()
@@ -164,20 +168,28 @@ class OverlayWindow(QMainWindow):
     def _setup_window(self) -> None:
         self.setWindowTitle("Book Translator")
         self.setWindowFlags(
-            Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
+            Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumWidth(600)
         self.setMinimumHeight(400)
 
     def _build_ui(self) -> None:
         central = QWidget()
+        central.setObjectName("central_widget")
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetNoConstraint)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # ---- Row 1: Title and Folder ----
+        # ---- Top Container (Opaque, Draggable) ----
+        self._top_container = QWidget()
+        self._top_container.setObjectName("top_container")
+        top_layout = QVBoxLayout(self._top_container)
+        top_layout.setSpacing(10)
+        top_layout.setContentsMargins(12, 12, 12, 10)
+
+        # Row 1: Title and Folder
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("📚"))
         self._title_edit = QLineEdit()
@@ -190,63 +202,87 @@ class OverlayWindow(QMainWindow):
         self._open_folder_btn.setToolTip("保存フォルダを Finder で開く")
         self._open_folder_btn.clicked.connect(self._open_screenshots_folder)
         header_layout.addWidget(self._open_folder_btn)
-        layout.addLayout(header_layout)
+        top_layout.addLayout(header_layout)
 
-        # ---- Row 2: Controls (Mode, Capture, OCR, Settings) ----
+        # Row 2: Controls
         ctrl_layout = QHBoxLayout()
 
-        # キャプチャ対象
         self._capture_combo = QComboBox()
         for label in _CAPTURE_MODES:
             self._capture_combo.addItem(label)
         self._capture_combo.currentTextChanged.connect(self._on_capture_mode_changed)
         ctrl_layout.addWidget(self._capture_combo, stretch=1)
 
-        # キャプチャボタン
         self._capture_btn = QPushButton("📸 キャプチャ")
         self._capture_btn.setToolTip("スクリーンショットを保存 (Cmd+Option+T)")
         self._capture_btn.clicked.connect(self.capture_requested.emit)
         ctrl_layout.addWidget(self._capture_btn, stretch=1)
 
-        # テキスト変換ボタン
         self._ocr_btn = QPushButton("🔤 変換")
         self._ocr_btn.setToolTip("最後に保存した PNG をテキストに変換します")
         self._ocr_btn.clicked.connect(self._on_ocr_btn_clicked)
         self._ocr_btn.setEnabled(False)
         ctrl_layout.addWidget(self._ocr_btn, stretch=1)
 
-        # 設定ボタン
         self._settings_btn = QPushButton("⚙")
         self._settings_btn.setFixedWidth(36)
         self._settings_btn.setToolTip("設定")
         self._settings_btn.clicked.connect(self._open_settings)
         ctrl_layout.addWidget(self._settings_btn)
 
-        # 終了ボタン
         self._quit_btn = QPushButton("❌")
         self._quit_btn.setFixedWidth(36)
         self._quit_btn.setToolTip("アプリを終了")
         self._quit_btn.clicked.connect(self._on_quit_clicked)
         ctrl_layout.addWidget(self._quit_btn)
 
-        layout.addLayout(ctrl_layout)
+        top_layout.addLayout(ctrl_layout)
+        main_layout.addWidget(self._top_container)
 
-        # ---- Result Display Area ----
+        # ---- Bottom Container (Translucent) ----
+        self._bottom_container = QWidget()
+        self._bottom_container.setObjectName("bottom_container")
+        bottom_layout = QVBoxLayout(self._bottom_container)
+        bottom_layout.setContentsMargins(12, 0, 12, 12)
+
         self._text_edit = QTextEdit()
+        self._text_edit.setObjectName("text_edit")
         self._text_edit.setReadOnly(True)
         self._text_edit.setMinimumHeight(250)
-        layout.addWidget(self._text_edit, stretch=1)
+        bottom_layout.addWidget(self._text_edit, stretch=1)
 
-        layout.addStretch()
+        # Resize Grip
+        grip_layout = QHBoxLayout()
+        grip_layout.addStretch()
+        self._size_grip = QSizeGrip(self._bottom_container)
+        grip_layout.addWidget(self._size_grip)
+        bottom_layout.addLayout(grip_layout)
+
+        main_layout.addWidget(self._bottom_container, stretch=1)
 
     # ---------------------------------------------------------------- settings
 
     def _apply_settings(self) -> None:
-        self.setWindowOpacity(self.settings.get("opacity", 0.92))
+        # ウィンドウ自体の不透明度は常に1.0に固定し、背景色(RGBA)で透過を表現する
+        self.setWindowOpacity(1.0)
+
+        opacity = self.settings.get("opacity", 0.92)
         theme = self.settings.get("theme", "dark")
+
+        # テーマに応じたベースカラー(16 hex)からRGBAを生成
+        base_color = "#1e1e1e" if theme == "dark" else "#f5f5f5"
+        r, g, b = int(base_color[1:3], 16), int(base_color[3:5], 16), int(base_color[5:7], 16)
+        rgba = f"rgba({r}, {g}, {b}, {opacity})"
+
         self.setStyleSheet(_DARK_STYLE if theme == "dark" else _LIGHT_STYLE)
 
+        # 下部コンテナにのみ透過背景を適用
+        self._bottom_container.setStyleSheet(
+            f"#bottom_container {{ background-color: {rgba}; }}"
+        )
+
         current_mode = self.settings.get("capture_mode", "full")
+
         for label, value in _CAPTURE_MODES.items():
             if value == current_mode:
                 self._capture_combo.setCurrentText(label)
@@ -357,6 +393,24 @@ class OverlayWindow(QMainWindow):
         return self._title_edit.text().strip()
 
     # ------------------------------------------------------------------ events
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            # top_container の範囲内でのクリックのみドラッグを許可する
+            if self._top_container.geometry().contains(event.pos()):
+                self._drag_pos = event.globalPosition().toPoint()
+                event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos:
+            delta = event.globalPosition().toPoint() - self._drag_pos
+            self.move(self.x() + delta.x(), self.y() + delta.y())
+            self._drag_pos = event.globalPosition().toPoint()
+            event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_pos = None
+        event.accept()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
