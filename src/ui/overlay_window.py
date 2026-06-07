@@ -4,7 +4,6 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -195,7 +194,7 @@ class OverlayWindow(QMainWindow):
 
         # ---- Row 2: Controls (Mode, Capture, OCR, Settings) ----
         ctrl_layout = QHBoxLayout()
-        
+
         # キャプチャ対象
         self._capture_combo = QComboBox()
         for label in _CAPTURE_MODES:
@@ -222,14 +221,14 @@ class OverlayWindow(QMainWindow):
         self._settings_btn.setToolTip("設定")
         self._settings_btn.clicked.connect(self._open_settings)
         ctrl_layout.addWidget(self._settings_btn)
-        
+
         # 終了ボタン
         self._quit_btn = QPushButton("❌")
         self._quit_btn.setFixedWidth(36)
         self._quit_btn.setToolTip("アプリを終了")
-        self._quit_btn.clicked.connect(self.close)
+        self._quit_btn.clicked.connect(self._on_quit_clicked)
         ctrl_layout.addWidget(self._quit_btn)
-        
+
         layout.addLayout(ctrl_layout)
 
         # ---- Result Display Area ----

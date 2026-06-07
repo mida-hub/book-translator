@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -40,11 +39,11 @@ class _OcrWorker(QObject):
             self.status.emit(f"Starting OCR for {self.png_path.name}")
             image = Image.open(self.png_path)
             text = recognize_text_from_image(image)
-            
+
             if not text.strip():
                 self.error.emit("No text detected in image.")
                 return
-                
+
             txt_path = save_text(text, self.png_path)
             self.finished.emit(str(txt_path), text)
         except Exception as exc:
@@ -96,11 +95,11 @@ class _AppController(QObject):
         try:
             capture_mode = self.settings.get("capture_mode", "full")
             image = capture_screen(capture_mode)
-            
+
             # 4. キャプチャ直後にウィンドウを戻す
             self.window.show()
             QApplication.processEvents()
-            
+
             saved_path = save_screenshot(image, book_title)
             self.window.show_captured(str(saved_path))
         except Exception as exc:
@@ -129,7 +128,7 @@ class _AppController(QObject):
         worker.finished.connect(on_finished)
         worker.error.connect(on_error)
         worker.status.connect(on_status)
-        
+
         # Cleanup connections
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
@@ -164,7 +163,7 @@ def main() -> int:
     def _on_about_to_quit():
         log.info("Closing application...")
         # 1.5秒待っても終了しない場合は強制終了
-        QTimer.singleShot(1500, lambda: os._exit(0))
+        QTimer.singleShot(1500, lambda: sys.exit(0))
 
     app.aboutToQuit.connect(_on_about_to_quit)
 
@@ -172,7 +171,7 @@ def main() -> int:
     exit_code = app.exec()
 
     log.info("Process finished. Force exiting.")
-    os._exit(exit_code)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
