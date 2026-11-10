@@ -1,8 +1,10 @@
+import logging
 import subprocess
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -18,11 +20,16 @@ from PyQt6.QtWidgets import (
 from src.capture import SCREENSHOTS_BASE_DIR, _safe_dirname
 from src.settings import Settings
 
+log = logging.getLogger("book-translator")
+
 _CAPTURE_MODES: dict[str, str] = {
     "画面左半分": "left",
     "画面右半分": "right",
     "画面全体": "full",
 }
+
+_DEFAULT_TITLE_PLACEHOLDER = "書籍タイトルを入力してください"
+_DEFAULT_TEXT_PLACEHOLDER = "Cmd+Option+T または「📸 キャプチャ」でページの文字を読み取ります"
 
 _DARK_STYLE = """
 QMainWindow, QWidget#central_widget {
@@ -43,6 +50,14 @@ QMainWindow, QWidget#central_widget {
 }
 QLabel {
     color: #e0e0e0;
+}
+QLabel#click_through_badge {
+    background-color: #d97706;
+    color: #ffffff;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: bold;
 }
 QLineEdit {
     background-color: #252526;
@@ -106,6 +121,14 @@ QMainWindow, QWidget#central_widget {
 QLabel {
     color: #1a1a1a;
 }
+QLabel#click_through_badge {
+    background-color: #d97706;
+    color: #ffffff;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: bold;
+}
 QLineEdit {
     background-color: #ffffff;
     color: #1a1a1a;
@@ -159,6 +182,11 @@ class OverlayWindow(QMainWindow):
         self._last_png_path: str | None = None
         self._drag_pos = None
 
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(300)
+        self._save_timer.timeout.connect(self._flush_settings)
+
         self._setup_window()
         self._build_ui()
         self._apply_settings()
@@ -188,13 +216,19 @@ class OverlayWindow(QMainWindow):
         top_layout.setSpacing(10)
         top_layout.setContentsMargins(12, 12, 12, 10)
 
-        # Row 1: Title and Folder
+        # Row 1: Title, Click-Through Badge, and Folder
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("📚"))
         self._title_edit = QLineEdit()
-        self._title_edit.setPlaceholderText("書籍タイトルを入力してください")
+        self._title_edit.setPlaceholderText(_DEFAULT_TITLE_PLACEHOLDER)
         self._title_edit.textChanged.connect(self._on_title_changed)
         header_layout.addWidget(self._title_edit, stretch=1)
+
+        self._click_through_badge = QLabel("🖱 透過ON")
+        self._click_through_badge.setObjectName("click_through_badge")
+        self._click_through_badge.setToolTip("クリック透過中 (Cmd+Option+C で解除)")
+        self._click_through_badge.setVisible(False)
+        header_layout.addWidget(self._click_through_badge)
 
         self._open_folder_btn = QPushButton("📂")
         self._open_folder_btn.setFixedWidth(36)
@@ -257,6 +291,7 @@ class OverlayWindow(QMainWindow):
         self._text_edit = QTextEdit()
         self._text_edit.setObjectName("text_edit")
         self._text_edit.setReadOnly(True)
+        self._text_edit.setPlaceholderText(_DEFAULT_TEXT_PLACEHOLDER)
         self._text_edit.setMinimumHeight(250)
         bottom_layout.addWidget(self._text_edit, stretch=1)
 
@@ -300,8 +335,7 @@ class OverlayWindow(QMainWindow):
         self._title_edit.setText(self.settings.get("book_title", ""))
 
         click_through = self.settings.get("click_through", False)
-        if click_through != self._click_through:
-            self._set_click_through(click_through)
+        self._set_click_through(click_through)
 
     def _restore_geometry(self) -> None:
         self.move(
@@ -313,9 +347,17 @@ class OverlayWindow(QMainWindow):
             self.settings.get("window_height", 400),
         )
 
-    def _save_geometry(self) -> None:
+    def _schedule_save(self) -> None:
+        """高頻度の変更（移動・リサイズ・タイトル入力）をデバウンスして保存する。"""
+        self._save_timer.start()
+
+    def _flush_settings(self) -> None:
+        """保留中のウィンドウ位置・サイズ・書籍タイトルを即座に保存する。"""
+        if self._save_timer.isActive():
+            self._save_timer.stop()
         geo = self.geometry()
         self.settings.update({
+            "book_title": self.current_book_title(),
             "window_x": geo.x(),
             "window_y": geo.y(),
             "window_width": geo.width(),
@@ -331,34 +373,42 @@ class OverlayWindow(QMainWindow):
     # ----------------------------------------------------------------- actions
 
     def _on_title_changed(self, text: str) -> None:
-        self.settings.set("book_title", text.strip())
+        if text.strip():
+            self._clear_title_warning()
+        self._schedule_save()
 
     def _on_capture_mode_changed(self, label: str) -> None:
         self.settings.set("capture_mode", _CAPTURE_MODES.get(label, "full"))
 
     def _on_quit_clicked(self) -> None:
         """保存して安全に終了をリクエストする。"""
-        self._save_geometry()
-        from PyQt6.QtWidgets import QApplication
+        self._flush_settings()
         QApplication.quit()
 
     def _on_copy_clicked(self) -> None:
         text = self._text_edit.toPlainText().strip()
         if text:
-            from PyQt6.QtWidgets import QApplication
             QApplication.clipboard().setText(text)
+            self._copy_btn.setText("✅")
+            QTimer.singleShot(1200, lambda: self._copy_btn.setText("📋"))
             self.show_status("Copied to clipboard.")
 
     def _on_clear_clicked(self) -> None:
         self._text_edit.clear()
+        self._text_edit.setPlaceholderText(_DEFAULT_TEXT_PLACEHOLDER)
         self.show_status("Text cleared.")
 
     def _set_click_through(self, enabled: bool) -> None:
         self._click_through = enabled
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+        self._click_through_badge.setVisible(enabled)
+        if enabled:
+            self._top_container.setStyleSheet("#top_container { border-color: #d97706; }")
+        else:
+            self._top_container.setStyleSheet("")
 
     def _open_screenshots_folder(self) -> None:
-        book_title = self.settings.get("book_title", "").strip()
+        book_title = self.current_book_title()
         target = SCREENSHOTS_BASE_DIR / _safe_dirname(book_title) if book_title else SCREENSHOTS_BASE_DIR
         target.mkdir(parents=True, exist_ok=True)
         subprocess.run(["open", str(target)], check=False)
@@ -372,32 +422,41 @@ class OverlayWindow(QMainWindow):
 
     def show_status(self, message: str) -> None:
         """UIには表示せず、コンソールログのみ出力します。"""
-        import logging
-        logging.getLogger("book-translator").info("Status: %s", message)
+        log.info("Status: %s", message)
 
     def show_captured(self, png_path: str) -> None:
         """キャプチャ完了通知。内部状態の更新のみ。"""
         self._last_png_path = png_path
-        self._capture_btn.setEnabled(True)
         self.show_status(f"Captured: {Path(png_path).name}")
 
     def show_ocr_done(self, txt_path: str, text: str) -> None:
         """OCR完了。テキスト表示エリアの更新。"""
+        self._text_edit.setPlaceholderText(_DEFAULT_TEXT_PLACEHOLDER)
         self._text_edit.setPlainText(text)
+        self.set_busy(False)
         self.show_status(f"OCR Done: {Path(txt_path).name}")
 
     def show_error(self, message: str) -> None:
-        """エラー通知もコンソールログのみ。"""
-        import logging
-        logging.getLogger("book-translator").error("Error: %s", message)
-        self._capture_btn.setEnabled(True)
+        """エラー通知。コンソール出力に加え、テキスト欄が空ならプレースホルダーで通知する。"""
+        log.error("Error: %s", message)
+        if not self._text_edit.toPlainText().strip():
+            self._text_edit.setPlaceholderText(f"⚠️ {message}")
+        self.set_busy(False)
 
     def set_busy(self, busy: bool) -> None:
         self._capture_btn.setEnabled(not busy)
+        self._capture_btn.setText("⏳ 処理中..." if busy else "📸 キャプチャ")
 
     def focus_title_input(self) -> None:
+        self._title_edit.setPlaceholderText("⚠️ 書籍タイトルを入力してください")
+        self._title_edit.setStyleSheet("border: 1px solid #e5534b;")
         self._title_edit.setFocus()
         self._title_edit.selectAll()
+        QTimer.singleShot(2000, self._clear_title_warning)
+
+    def _clear_title_warning(self) -> None:
+        self._title_edit.setStyleSheet("")
+        self._title_edit.setPlaceholderText(_DEFAULT_TITLE_PLACEHOLDER)
 
     def current_book_title(self) -> str:
         return self._title_edit.text().strip()
@@ -424,12 +483,12 @@ class OverlayWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._save_geometry()
+        self._schedule_save()
 
     def moveEvent(self, event) -> None:
         super().moveEvent(event)
-        self._save_geometry()
+        self._schedule_save()
 
     def closeEvent(self, event) -> None:
-        self._save_geometry()
+        self._flush_settings()
         super().closeEvent(event)

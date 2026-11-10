@@ -29,10 +29,15 @@ class Settings:
         return self._data.get(key, default)
 
     def set(self, key: str, value: Any) -> None:
+        if self._data.get(key) == value:
+            return
         self._data[key] = value
         self._save()
 
     def update(self, values: dict[str, Any]) -> None:
+        changed = any(self._data.get(k) != v for k, v in values.items())
+        if not changed:
+            return
         self._data.update(values)
         self._save()
 
