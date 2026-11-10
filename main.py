@@ -1,10 +1,9 @@
 import logging
 import sys
-import time
 from pathlib import Path
 
 from PIL import Image
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot, QTimer
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QApplication
 
 from src.capture import capture_screen, save_screenshot, save_text
@@ -18,7 +17,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
-    stream=sys.stdout
+    stream=sys.stdout,
 )
 log = logging.getLogger("book-translator")
 
@@ -29,16 +28,16 @@ class _OcrWorker(QObject):
     error = pyqtSignal(str)
     status = pyqtSignal(str)
 
-    def __init__(self, png_path: str) -> None:
+    def __init__(self, image: Image.Image, png_path: Path) -> None:
         super().__init__()
-        self.png_path = Path(png_path)
+        self.image = image
+        self.png_path = png_path
 
     @pyqtSlot()
     def run(self) -> None:
         try:
             self.status.emit(f"Starting OCR for {self.png_path.name}")
-            image = Image.open(self.png_path)
-            text = recognize_text_from_image(image)
+            text = recognize_text_from_image(self.image)
 
             if not text.strip():
                 self.error.emit("No text detected in image.")
@@ -61,6 +60,7 @@ class _AppController(QObject):
         self.settings = settings
         self.window = window
         self._thread: QThread | None = None
+        self._worker: QObject | None = None
 
         self._sig_capture.connect(self._start_capture)
         self._sig_toggle_click_through.connect(window.toggle_click_through)
@@ -74,7 +74,11 @@ class _AppController(QObject):
 
     @pyqtSlot()
     def _start_capture(self) -> None:
-        """キャプチャ処理。ウィンドウを確実に隠してから実行する。"""
+        """キャプチャ処理。ウィンドウを隠して非ブロッキングタイマー経由で実行する。"""
+        if self._thread is not None and self._thread.isRunning():
+            log.debug("Capture/OCR already in progress; ignoring request.")
+            return
+
         book_title = self.window.current_book_title()
         if not book_title:
             self.window.show_status("Warning: Book title is empty.")
@@ -84,52 +88,41 @@ class _AppController(QObject):
         self.window.set_busy(True)
         self.window.show_status("Hiding window for capture...")
 
-        # 1. ウィンドウを隠す
+        # ウィンドウを隠し、macOS のウィンドウサーバーが反映するのをイベントループを止めずに待つ
         self.window.hide()
-        # 2. イベントループを回して確実に画面から消す
         QApplication.processEvents()
-        # 3. macOSのウィンドウサーバーが反映するのを少し待つ (重要)
-        time.sleep(0.15)
+        QTimer.singleShot(150, lambda: self._perform_capture(book_title))
 
+    def _perform_capture(self, book_title: str) -> None:
         try:
             capture_mode = self.settings.get("capture_mode", "full")
             image = capture_screen(capture_mode)
 
-            # 4. キャプチャ直後にウィンドウを戻す
+            # キャプチャ直後にウィンドウを戻す
             self.window.show()
             QApplication.processEvents()
 
             saved_path = save_screenshot(image, book_title)
             log.info("Captured: %s", saved_path.name)
             self.window.show_captured(str(saved_path))
-            
-            # Automatically start OCR
-            self._start_ocr(str(saved_path))
+
+            # メモリ上の画像をそのまま渡してバックグラウンドで OCR 実行
+            self._start_ocr(image, saved_path)
         except Exception as exc:
             log.exception("Capture process failed")
             self.window.show()
             self.window.show_error(str(exc))
 
-    @pyqtSlot(str)
-    def _start_ocr(self, png_path: str) -> None:
-        """OCRを一時的にメインスレッドで実行して、ハングの原因を調査する。"""
+    def _start_ocr(self, image: Image.Image, png_path: Path) -> None:
+        """バックグラウンドスレッドで OCR を開始する。"""
         self.window.set_busy(True)
-        log.info("Starting OCR (Direct) for: %s", Path(png_path).name)
-        
-        try:
-            from PIL import Image
-            image = Image.open(png_path)
-            text = recognize_text_from_image(image)
-            
-            if not text.strip():
-                self._on_ocr_error("No text detected.")
-                return
-                
-            txt_path = save_text(text, Path(png_path))
-            self._on_ocr_finished(str(txt_path), text)
-        except Exception as exc:
-            log.exception("Direct OCR failed")
-            self._on_ocr_error(str(exc))
+        worker = _OcrWorker(image, png_path)
+        self._run_worker(
+            worker,
+            on_finished=self._on_ocr_finished,
+            on_error=self._on_ocr_error,
+            on_status=self.window.show_status,
+        )
 
     def _on_ocr_finished(self, txt_path: str, text: str) -> None:
         log.info("OCR Success: %s", Path(txt_path).name)
@@ -139,8 +132,8 @@ class _AppController(QObject):
         log.error("OCR Failed: %s", message)
         self.window.show_error(message)
 
-    def _run_worker(self, worker: QObject, *, on_finished, on_error, on_status) -> None:
-        thread = QThread()
+    def _run_worker(self, worker: _OcrWorker, *, on_finished, on_error, on_status) -> None:
+        thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(on_finished)
@@ -151,11 +144,17 @@ class _AppController(QObject):
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: setattr(self, '_thread', None))
+        thread.finished.connect(self._clear_worker_refs)
 
+        self._worker = worker
         self._thread = thread
         thread.start()
+
+    def _clear_worker_refs(self) -> None:
+        self._worker = None
+        self._thread = None
 
 
 def main() -> int:
@@ -176,10 +175,10 @@ def main() -> int:
         log.error("Hotkey listener failed to start: %s", exc)
         hotkey_listener = None
 
-    # 終了シグナルに反応して、数秒後に強制終了するウォッチドッグを設定
-    # これにより QApplication.quit() が呼ばれた後、クリーンアップでハングしても確実に終了する
-    def _on_about_to_quit():
+    def _on_about_to_quit() -> None:
         log.info("Closing application...")
+        if hotkey_listener is not None:
+            hotkey_listener.stop()
         # 1.5秒待っても終了しない場合は強制終了
         QTimer.singleShot(1500, lambda: sys.exit(0))
 
@@ -188,8 +187,8 @@ def main() -> int:
     window.show()
     exit_code = app.exec()
 
-    log.info("Process finished. Force exiting.")
-    sys.exit(exit_code)
+    log.info("Process finished.")
+    return exit_code
 
 
 if __name__ == "__main__":

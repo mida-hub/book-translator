@@ -65,6 +65,10 @@ def save_screenshot(image: Image.Image, book_title: str) -> Path:
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dest_path = dest_dir / f"{timestamp}.png"
+    counter = 1
+    while dest_path.exists():
+        dest_path = dest_dir / f"{timestamp}_{counter}.png"
+        counter += 1
     image.save(dest_path, format="PNG")
     return dest_path
 
