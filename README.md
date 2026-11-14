@@ -1,7 +1,9 @@
 # book-translator
 
-Kindle 英語読書補助用 Mac スクリーンショット収集・OCR アプリ。
-ウィンドウに書籍タイトルを設定し、`Cmd+Option+T` でキャプチャするたびに `~/book-translator/screenshots/<タイトル>/` にタイムスタンプ付き PNG を保存するとともに、macOS Vision Framework で自動的に OCR（文字認識）を実行して抽出テキストを `.txt` 保存および透過ウィンドウ上に表示します。
+Kindle 英語読書補助用 Mac スクリーンショット収集・Gemini 翻訳オーバーレイアプリ。
+ウィンドウに書籍タイトルを設定し、`Cmd+Option+T` でキャプチャするたびに Kindle ウィンドウの本文領域を自動切り出しして `~/book-translator/screenshots/<タイトル>/` に PNG 保存するとともに、Gemini (`gemini-3.5-flash`) で日本語訳をストリーミング生成して透過ウィンドウ上に表示します。
+
+同じページを再キャプチャした場合は、dHash（知覚ハッシュ）キャッシュにより API を呼ばず即座に翻訳結果（`.ja.txt`）を再利用します。
 
 ## セットアップ
 
@@ -17,7 +19,21 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-### 3. macOS 権限の付与
+### 3. Gemini 認証の設定
+
+`.env.example` をコピーして `.env` を作成し、以下のいずれかの方法で認証を設定してください。
+
+- **Vertex AI（サービスアカウント）を使う場合（推奨）**:
+  `terraform/` を適用して `credentials/service_account.json` を発行します。
+  ```bash
+  cd terraform
+  terraform init
+  terraform apply
+  ```
+- **Google AI Studio（API キー）を使う場合**:
+  `.env` に `GEMINI_API_KEY` を設定します。
+
+### 4. macOS 権限の付与
 
 | 権限 | 用途 |
 |------|------|
@@ -26,7 +42,7 @@ uv sync
 
 システム環境設定 → プライバシーとセキュリティ から、Terminal（または Python）に上記 2 つの権限を付与してください。
 
-### 4. 起動
+### 5. 起動
 
 ```bash
 uv run python main.py
@@ -35,17 +51,19 @@ uv run python main.py
 ## 使い方
 
 1. ウィンドウ上部の 📚 フィールドに**書籍タイトル**を入力（入力内容は自動保存されます）
-2. キャプチャ領域（画面左半分 / 画面右半分 / 画面全体）をドロップダウンで選択
-3. Kindle でページを表示し `Cmd+Option+T` またはウィンドウの「📸 キャプチャ」ボタンを押す
-4. `~/book-translator/screenshots/<タイトル>/` にスクリーンショット（`.png`）と OCR 抽出テキスト（`.txt`）が保存され、ウィンドウ下部の透過エリアにテキストが表示される
-5. 📋 ボタンで抽出テキストをクリップボードにコピー、📂 ボタンで保存フォルダを Finder で開ける
+2. Kindle でページを表示し `Cmd+Option+T` またはウィンドウの「📸 翻訳」ボタンを押す（Kindle ウィンドウが検出できない場合のみ、ドロップダウンの領域設定にフォールバックします）
+3. `~/book-translator/screenshots/<タイトル>/` にスクリーンショット（`.png`）と日本語訳（`.ja.txt`）が保存され、ウィンドウ下部のオーバーレイにストリーミング表示されます
+4. `Cmd+Option+C` でクリック透過を ON にすると、オーバーレイを Kindle に重ねたままページめくりができます
 
 | 操作 | 機能 |
 |------|------|
-| `Cmd+Option+T` | キャプチャ ＆ 自動 OCR 実行（Kindle 画面がアクティブなまま押せる） |
+| `Cmd+Option+T` | キャプチャ ＆ Gemini 翻訳実行（Kindle 画面がアクティブなまま押せる） |
 | `Cmd+Option+C` | クリック透過 ON/OFF 切り替え（Kindle のページめくりを妨げないモード） |
-| ウィンドウ内「📸 キャプチャ」ボタン | キャプチャ ＆ 自動 OCR 実行 |
-| ウィンドウ内「📋」ボタン | 抽出テキストをクリップボードにコピー |
+| ウィンドウ内「📸 翻訳」ボタン | キャプチャ ＆ Gemini 翻訳実行 |
+| ウィンドウ内「◀ / ▶」ボタン | 翻訳済みの過去ページ履歴を前後移動 |
+| ウィンドウ内「A- / A+」ボタン | 翻訳テキストのフォントサイズ調整（自動保存） |
+| ウィンドウ内「👁」ボタン | 背景の不透明 / 透過をワンクリック切り替え |
+| ウィンドウ内「📋」ボタン | 表示テキストをクリップボードにコピー |
 | ウィンドウ内「🧹」ボタン | 表示テキストをクリア |
 | ウィンドウ内「📂」ボタン | 保存フォルダを Finder で開く |
 | ウィンドウ内「⚙」ボタン | 設定（透過度・テーマ・クリック透過） |
@@ -58,10 +76,12 @@ book-translator/
 ├── main.py                  # エントリーポイント・アプリ制御
 ├── pyproject.toml           # プロジェクト定義・依存関係
 ├── uv.lock
-├── spec.md                  # 技術仕様書
+├── .env.example             # 環境変数テンプレート
+├── credentials/             # Vertex AI サービスアカウントキー格納先
+├── terraform/               # Vertex AI API 有効化・サービスアカウント作成用 Terraform
 └── src/
-    ├── capture.py           # スクリーンキャプチャ・画像/テキスト保存 (mss / Pillow)
-    ├── ocr.py               # 文字認識・テキスト整形 (macOS Vision Framework)
+    ├── capture.py           # Kindle ウィンドウ検出・キャプチャ・上下クロップ (mss / Quartz / Pillow)
+    ├── translator.py        # Gemini ストリーミング翻訳・dHash キャッシュ (google-genai)
     ├── settings.py          # 設定の永続化 (~/.book-translator/settings.json)
     ├── hotkey_listener.py   # グローバルホットキー監視 (pynput)
     └── ui/
@@ -74,10 +94,9 @@ book-translator/
 ```
 ~/book-translator/screenshots/
 └── <書籍タイトル>/
-    ├── 2026-05-31_10-00-00.png
-    ├── 2026-05-31_10-00-00.txt
-    ├── 2026-05-31_10-01-23.png
-    ├── 2026-05-31_10-01-23.txt
+    ├── cache.json
+    ├── 2026-11-14_22-01-48.png
+    ├── 2026-11-14_22-01-48.ja.txt
     └── ...
 ```
 
