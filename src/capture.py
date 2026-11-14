@@ -3,14 +3,45 @@ from datetime import datetime
 from pathlib import Path
 
 import mss
+import Quartz
 from PIL import Image
 
 SCREENSHOTS_BASE_DIR = Path.home() / "book-translator" / "screenshots"
 
 
+def _find_kindle_window_bounds() -> dict[str, int] | None:
+    """画面上に表示されている Kindle ウィンドウの座標 (top, left, width, height) を返す。"""
+    options = (
+        Quartz.kCGWindowListOptionOnScreenOnly
+        | Quartz.kCGWindowListExcludeDesktopElements
+    )
+    window_list = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
+    if not window_list:
+        return None
+
+    for win in window_list:
+        owner = str(win.get("kCGWindowOwnerName", ""))
+        if "Kindle" not in owner:
+            continue
+        bounds = win.get("kCGWindowBounds")
+        if not bounds:
+            continue
+        w = int(bounds.get("Width", 0))
+        h = int(bounds.get("Height", 0))
+        if w < 200 or h < 200:
+            continue
+        return {
+            "top": int(bounds.get("Y", 0)),
+            "left": int(bounds.get("X", 0)),
+            "width": w,
+            "height": h,
+        }
+    return None
+
+
 def capture_screen(mode: str) -> Image.Image:
     """
-    プライマリモニターの指定領域をキャプチャする。
+    Kindle ウィンドウが検出できればその領域を、なければプライマリモニターの指定領域をキャプチャする。
 
     Args:
         mode: 'left'（画面左半分）、'right'（画面右半分）、'full'（画面全体）
@@ -19,6 +50,18 @@ def capture_screen(mode: str) -> Image.Image:
         キャプチャした PIL RGB Image
     """
     with mss.mss() as sct:
+        kindle_region = _find_kindle_window_bounds()
+        if kindle_region is not None:
+            screenshot = sct.grab(kindle_region)
+            img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+            # Kindle の上部ツールバー(約9%)と下部プログレスバー(約6%)をカット
+            w, h = img.size
+            top_crop = int(h * 0.09)
+            bottom_crop = int(h * 0.94)
+            if bottom_crop > top_crop:
+                img = img.crop((0, top_crop, w, bottom_crop))
+            return img
+
         monitor = sct.monitors[1]  # monitors[0] は全モニター合成、[1] がプライマリ
         width = monitor["width"]
         height = monitor["height"]

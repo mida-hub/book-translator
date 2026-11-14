@@ -174,11 +174,14 @@ class OverlayWindow(QMainWindow):
     """
 
     capture_requested = pyqtSignal()
+    history_prev_requested = pyqtSignal()
+    history_next_requested = pyqtSignal()
 
     def __init__(self, settings: Settings) -> None:
         super().__init__()
         self.settings = settings
         self._click_through = False
+        self._opaque_mode = False
         self._last_png_path: str | None = None
         self._drag_pos = None
 
@@ -245,10 +248,23 @@ class OverlayWindow(QMainWindow):
             self._capture_combo.addItem(label)
         self._capture_combo.currentTextChanged.connect(self._on_capture_mode_changed)
         ctrl_layout.addWidget(self._capture_combo, stretch=1)
-        self._capture_btn = QPushButton("📸 キャプチャ")
-        self._capture_btn.setToolTip("スクリーンショットを保存 (Cmd+Option+T)")
+        self._capture_btn = QPushButton("📸 翻訳")
+        self._capture_btn.setToolTip("スクリーンショットを撮影して翻訳 (Cmd+Option+T)")
         self._capture_btn.clicked.connect(self.capture_requested.emit)
         ctrl_layout.addWidget(self._capture_btn, stretch=2)
+
+        # 履歴ナビゲーション
+        self._prev_btn = QPushButton("◀")
+        self._prev_btn.setFixedWidth(32)
+        self._prev_btn.setToolTip("前の翻訳ページを表示")
+        self._prev_btn.clicked.connect(self.history_prev_requested.emit)
+        ctrl_layout.addWidget(self._prev_btn)
+
+        self._next_btn = QPushButton("▶")
+        self._next_btn.setFixedWidth(32)
+        self._next_btn.setToolTip("次の翻訳ページを表示")
+        self._next_btn.clicked.connect(self.history_next_requested.emit)
+        ctrl_layout.addWidget(self._next_btn)
 
         # コピーボタン
         self._copy_btn = QPushButton("📋")
@@ -264,6 +280,27 @@ class OverlayWindow(QMainWindow):
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         self._clear_btn.setStyleSheet("background-color: #444;")
         ctrl_layout.addWidget(self._clear_btn)
+
+        # フォントサイズ調整ボタン
+        self._font_down_btn = QPushButton("A-")
+        self._font_down_btn.setFixedWidth(34)
+        self._font_down_btn.setToolTip("フォントサイズを小さくする")
+        self._font_down_btn.clicked.connect(lambda: self._change_font_size(-2))
+        ctrl_layout.addWidget(self._font_down_btn)
+
+        self._font_up_btn = QPushButton("A+")
+        self._font_up_btn.setFixedWidth(34)
+        self._font_up_btn.setToolTip("フォントサイズを大きくする")
+        self._font_up_btn.clicked.connect(lambda: self._change_font_size(2))
+        ctrl_layout.addWidget(self._font_up_btn)
+
+        # 透過 ON/OFF ボタン
+        self._opacity_btn = QPushButton("👁")
+        self._opacity_btn.setFixedWidth(36)
+        self._opacity_btn.setCheckable(True)
+        self._opacity_btn.setToolTip("背景の不透明/透過を切り替え")
+        self._opacity_btn.toggled.connect(self._toggle_opacity_mode)
+        ctrl_layout.addWidget(self._opacity_btn)
 
         # 設定ボタン
         self._settings_btn = QPushButton("⚙")
@@ -310,7 +347,7 @@ class OverlayWindow(QMainWindow):
         # ウィンドウ自体の不透明度は常に1.0に固定し、背景色(RGBA)で透過を表現する
         self.setWindowOpacity(1.0)
 
-        opacity = self.settings.get("opacity", 0.92)
+        opacity = 1.0 if self._opaque_mode else self.settings.get("opacity", 0.92)
         theme = self.settings.get("theme", "dark")
 
         # テーマに応じたベースカラー(16 hex)からRGBAを生成
@@ -324,6 +361,9 @@ class OverlayWindow(QMainWindow):
         self._bottom_container.setStyleSheet(
             f"#bottom_container {{ background-color: {rgba}; }}"
         )
+
+        font_size = int(self.settings.get("font_size", 16))
+        self._text_edit.setStyleSheet(f"QTextEdit {{ font-size: {font_size}px; }}")
 
         current_mode = self.settings.get("capture_mode", "full")
 
@@ -371,6 +411,18 @@ class OverlayWindow(QMainWindow):
             self._apply_settings()
 
     # ----------------------------------------------------------------- actions
+
+    def _change_font_size(self, delta: int) -> None:
+        """翻訳テキストのフォントサイズを変更して保存する。"""
+        current = int(self.settings.get("font_size", 16))
+        new_size = max(10, min(36, current + delta))
+        self.settings.set("font_size", new_size)
+        self._apply_settings()
+
+    def _toggle_opacity_mode(self, checked: bool) -> None:
+        """背景の不透明(1.0)と透過(設定値)を切り替える。"""
+        self._opaque_mode = checked
+        self._apply_settings()
 
     def _on_title_changed(self, text: str) -> None:
         if text.strip():
@@ -429,12 +481,27 @@ class OverlayWindow(QMainWindow):
         self._last_png_path = png_path
         self.show_status(f"Captured: {Path(png_path).name}")
 
-    def show_ocr_done(self, txt_path: str, text: str) -> None:
-        """OCR完了。テキスト表示エリアの更新。"""
+    def start_translation_stream(self) -> None:
+        """ストリーミング翻訳開始。テキストエリアをクリアして待機状態にする。"""
+        self._text_edit.clear()
+        self._text_edit.setPlaceholderText("⏳ Gemini で翻訳中...")
+
+    def append_translation_chunk(self, chunk: str) -> None:
+        """ストリーミング翻訳のチャンクを末尾に追記する。"""
+        cursor = self._text_edit.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.insertText(chunk)
+        self._text_edit.setTextCursor(cursor)
+        self._text_edit.ensureCursorVisible()
+
+    def show_translation_done(self, txt_path: str, text: str, from_cache: bool = False) -> None:
+        """翻訳完了（またはキャッシュヒット）。テキスト表示エリアの更新。"""
         self._text_edit.setPlaceholderText(_DEFAULT_TEXT_PLACEHOLDER)
-        self._text_edit.setPlainText(text)
+        if from_cache or not self._text_edit.toPlainText().strip():
+            self._text_edit.setPlainText(text)
         self.set_busy(False)
-        self.show_status(f"OCR Done: {Path(txt_path).name}")
+        prefix = "Cache Hit" if from_cache else "Translation Done"
+        self.show_status(f"{prefix}: {Path(txt_path).name}")
 
     def show_error(self, message: str) -> None:
         """エラー通知。コンソール出力に加え、テキスト欄が空ならプレースホルダーで通知する。"""
@@ -445,7 +512,7 @@ class OverlayWindow(QMainWindow):
 
     def set_busy(self, busy: bool) -> None:
         self._capture_btn.setEnabled(not busy)
-        self._capture_btn.setText("⏳ 処理中..." if busy else "📸 キャプチャ")
+        self._capture_btn.setText("⏳ 翻訳中..." if busy else "📸 翻訳")
 
     def focus_title_input(self) -> None:
         self._title_edit.setPlaceholderText("⚠️ 書籍タイトルを入力してください")
